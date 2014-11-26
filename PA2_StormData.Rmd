@@ -1,0 +1,274 @@
+---
+title: "PA2_RepResearch"
+author: "Andrew Moore"
+date: "Tuesday, November 25, 2014"
+output: pdf_document
+---
+
+**Synopsis**
+
+Major weather events often have immense tolls on both human life and economic activity. Weather events, natural disasters, and climate activity are some of the most widely recorded and extensive sources of data employed by modern society. These valuable records provide the ability to measure the cost of destructive natural events, and ultimately inform organizations and governments aiming to mitigate risks or participate in relief efforts. This analysis employs data maintained by the U.S. National Oceanic and Atmospheric Administration's storm database. The included code retrieves and imports data from 1950-2011, summarizing human costs (measured by fatalities and injuries) and economic costs (measured through crop damage and economic damage) by event category. These analyses are performed at the aggregate (country level), in addition to analysis of regional variations in human and economic costs.
+    
+**Data Processing**
+
+All analyses were performed using R 3.1.0 using the RStudio IDE. Three packages were used for the analysis.
+```{r packages}
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+library(scales)
+```
+The data were accessed using a URL hyperlink. The dataset was provided in spreadsheet form, compressed as a bzfile. After downloading the file, variables of interest were chosen to be imported for analysis.
+```{r import, cache = TRUE}
+
+url <- "http://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+    
+download.file(url, "repdata-data-StormData.csv.bz2")
+
+vars <- rep("NULL", 37)
+vars[c(2, 3, 7, 8, 37)] <- "factor"
+vars[c(22:27)] <- "numeric"
+vars[c(26, 28)] <- "character"
+
+system.time(data <- read.csv(bzfile("repdata-data-StormData.csv.bz2"), 
+                             colClasses = vars, sep = ",", nrow = 902297))
+
+```
+
+After being imported, a subset was chosen to form the basis of the presented results. A key interest is the relationship between high cost on human life and economic damage. To accomplish this, the analysis included only events in which >25 fatalities or >50 injuries were reported. This resulted in a set of 436 events for analysis.
+```{r subset}
+subset <- filter(data, FATALITIES > 25 | INJURIES > 50)
+```
+
+Given the gradual evolution and modification of the NOAA Storm Database over time, event values/codes have been periodically added or modified. While coding distinctions lead to greater nuance when investigating specific categories of events, certain codes may be underpopulated or possibly redundant. To permit more simplified totals, certain variables were collapsed into more general categories (e.g. "EXCESSIVE HEAT" and "HEAT WAVE" were recategorized as merely "HEAT").
+```{r munging}
+names(subset) <- toupper(names(subset)) ## all variables translated to uppercase to permit easier queries
+
+heatstr <- grep("HEAT", subset$EVTYPE)
+heatstr <- append(heatstr, grep("WARM", subset$EVTYPE))
+subset$EVTYPE[heatstr] <- "HEAT"
+
+fogstr <- grep("FOG", subset$EVTYPE)
+subset$EVTYPE[fogstr] <- "FOG"
+
+firestr <- grep("FIRE", subset$EVTYPE)
+subset$EVTYPE[firestr] <- "FIRE"
+
+wintstr <- grep("WINT", subset$EVTYPE)
+wintstr <- append(wintstr, grep("ICE", subset$EVTYPE))
+wintstr <- append(wintstr, grep("BLIZZARD", subset$EVTYPE))
+wintstr <- append(wintstr, grep("SNOW", subset$EVTYPE))
+wintstr <- append(wintstr, grep("COLD", subset$EVTYPE))
+wintstr <- append(wintstr, grep("HAIL", subset$EVTYPE))
+subset$EVTYPE[wintstr] <- "WINTER WEATHER"
+
+floodstr <- grep("FLOOD", subset$EVTYPE)
+subset$EVTYPE[floodstr] <- "FLOOD"
+
+windstr <- grep("WIND", subset$EVTYPE)
+subset$EVTYPE[windstr] <- "WIND"
+
+rm(windstr, wintstr, floodstr, firestr, heatstr, fogstr)
+```
+
+Next, the subsetted data was organized into four separate datasets based on broad geographic regions of the U.S.
+```{r regional subsets}
+## Organizing USA in to regions
+
+uswest <- c("WA", "OR", "CA", "ID", "NV", "AZ", "MT", "WY", "CO", "NM", "AK")
+ussouth <- c("TX", "OK", "AR", "LO", "MS", "AL", "FL", "GA", "KY", "TN", "VA",
+             "WV", "DE", "MD", "NC", "SC")
+usmidwest <- c("ND", "SD", "NE", "KS", "MN", "IA", "MO", "WI", "IL", "MI", "IN",
+               "OH")
+usnortheast <- c("MA", "NH", "VT", "MA", "RI", "CT", "NY", "PA", "CT", "NJ", "DC")
+
+region <- c()
+for (i in 1:nrow(subset)) {
+    if (subset$STATE[i] %in% uswest) {
+        region <- c(region, "west")
+    } else {
+        if (subset$STATE[i] %in% ussouth) {
+            region <- c(region, "south")
+        } else {
+            if (subset$STATE[i] %in% usmidwest) {
+                region <- c(region, "midwest")
+            } else {
+                if (subset$STATE[i] %in% usnortheast) {
+                    region <- c(region, "northeast")
+                } else {
+                    region <- c(region, NA)
+                }
+            }
+        }
+    }
+}
+
+subset <- cbind(subset, region)
+rm(usmidwest, usnortheast, ussouth, uswest)
+```
+
+Finally, in order to assess economic costs, the variables detailing damage amounts to property and crops needed to be adjusted. The variables were split between numeric values (e.g. "125") and character strings (e.g. "K"), combining to form a categorical summary of an event's cost (e.g. "125K" for $125,000). These columns were reprocessed and combined to form a more interpretable value. As with the choice regarding subsetting, this analysis is principally concerned with events that present the greatest aggregate harm. Thus, only values containing the "K", "M", and "B" strings (representing "thousands", "millions", and "billions" respectively) were included.
+```{r money munging}
+econdat <- filter(subset, PROPDMGEXP == "K" | PROPDMGEXP == "M" | PROPDMGEXP == "B" | CROPDMGEXP == "K" | CROPDMGEXP == "M" | CROPDMGEXP == "B")
+
+econdat$PROPDMGEXP[econdat$PROPDMGEXP == "K"] <- 1000
+econdat$PROPDMGEXP[econdat$PROPDMGEXP == "M"] <- 1000000
+econdat$PROPDMGEXP[econdat$PROPDMGEXP == "B"] <- 1000000000
+
+
+econdat$CROPDMGEXP[econdat$CROPDMGEXP == "K"] <- 1000
+econdat$CROPDMGEXP[econdat$CROPDMGEXP == "M"] <- 1000000
+econdat$CROPDMGEXP[econdat$CROPDMGEXP == "B"] <- 1000000000
+
+econdat <- mutate(econdat, propcost = PROPDMG * as.numeric(PROPDMGEXP))
+econdat <- mutate(econdat, cropcost = CROPDMG * as.numeric(CROPDMGEXP))
+
+```
+
+**Results**
+
+Before examining regional variation, aggregate totals for the U.S. were investigated. We first examined the impact on human life/health through the use of the FATALITIES and INJURIES variables.
+```{r summarize totals}
+## Highest toll of fatalities
+subset %.%
+    group_by(EVTYPE) %.%
+    summarise(total = sum(FATALITIES)) %.%
+    arrange(desc(total)) %.%
+    head(10)
+
+
+## Highest toll of injuries
+subset %.%
+    group_by(EVTYPE) %.%
+    summarise(total = sum(INJURIES)) %.%
+    arrange(desc(total)) %.%
+    head(10)
+```
+Based on this subset, tornados, high levels of heat, and flooding present the highest burden of injury and harm to human life. Tornados are the most highly reported event in the data. Without further documentation it's unclear whether this represents incomplete records or some form of bias in reporting, but these data show tornados as representing the highest threat to human life. Hurricanes and tropical storms are another source of widescale destruction with high costs on human life, and it's unclear why higher numbers of fatalities/injuries aren't reported for these event type.
+
+We next examined the trends in economic loss based on climate event. Having transformed the dollar amounts, these new totals were plotted based on the type of event.
+```{r crop & prop plots}
+p1 <- ggplot(na.omit(econdat), aes(x = EVTYPE, y = cropcost)) + geom_boxplot() + scale_y_continuous(label = comma, name = "Crop Cost in $") + coord_flip()
+p2 <- ggplot(na.omit(econdat), aes(x = EVTYPE, y = propcost)) + geom_boxplot() + scale_y_continuous(label = comma, name = "Property Cost in $") + coord_flip()
+grid.arrange(p1, p2, ncol = 1)
+```
+
+From an economic standpoint, hurricanes represent both the widest level of variability in cost, as well as the highest amount of cost. The lack of variability in tornado damage seems unusual, although the outliers present when investigating property cost do illustrate their potential to create wide-scale damage.
+
+Potential reporting errors aside, another key question is which events present the greatest toll on human life and property as varied by region. Using the subsets defined by broad-geographic regions of the US, we reperformed the original analyses reported above.
+```{r regional differences}
+table(subset$region)
+
+### Highest toll of fatalities ###
+    ## West ##
+filter(subset, region == "west") %.%
+        group_by(EVTYPE) %.%
+        summarise(west.total = sum(FATALITIES)) %.%
+        arrange(desc(west.total)) %.%
+        head(10)
+
+### Highest toll of fatalities ###
+    ## Northeast ##
+filter(subset, region == "northeast") %.%
+            group_by(EVTYPE) %.%
+            summarise(northeast.total = sum(FATALITIES)) %.%
+            arrange(desc(northeast.total)) %.%
+            head(10)
+
+### Highest toll of fatalities ###
+    ## South ##
+filter(subset, region == "south") %.%
+        group_by(EVTYPE) %.%
+        summarise(south.total = sum(FATALITIES)) %.%
+        arrange(desc(south.total)) %.%
+        head(10)
+
+### Highest toll of fatalities ###
+    ## Midwest ##
+filter(subset, region == "midwest") %.%
+        group_by(EVTYPE) %.%
+        summarise(midwest.total = sum(FATALITIES)) %.%
+        arrange(desc(midwest.total)) %.%
+        head(10)
+
+### Highest toll of injuries ###
+    ## West ##
+filter(subset, region == "west") %.%
+       group_by(EVTYPE) %.%
+       summarise(west.total = sum(INJURIES)) %.%
+       arrange(desc(west.total)) %.%
+       head(10)
+
+### Highest toll of injuries ###
+    ## Northeast ##
+filter(subset, region == "northeast") %.%
+        group_by(EVTYPE) %.%
+        summarise(northeast.total = sum(INJURIES)) %.%
+        arrange(desc(northeast.total)) %.%
+        head(10)
+
+### Highest toll of injuries ###
+    ## South ##
+filter(subset, region == "south") %.%
+        group_by(EVTYPE) %.%
+        summarise(south.total = sum(INJURIES)) %.%
+        arrange(desc(south.total)) %.%
+        head(10)
+
+### Highest toll of injuries ###
+    ## Midwest ##
+filter(subset, region == "midwest") %.%
+       group_by(EVTYPE) %.%
+       summarise(midwest.total = sum(INJURIES)) %.%
+       arrange(desc(midwest.total)) %.%
+       head(10)
+```
+
+One consideration is the distribution of events across each region. Events are reported substantially more in the south and midwest of the US. It is unreasonable to assume that the west and northeast experience fewer events, but that based on the selection criteria, the midwest and southern states experience climate events with higher tolls on human life.
+Fires and excessive heat are of primary concern to the west, while the northeast is primarily threatened by events typified by heat. The midwest and south also experience dangerous conditions related to intolerably high temperatures, but principal sources of danger are overshadowed by tornados. 
+```{r crop & prop plots by region}
+p1 <- ggplot(na.omit(filter(econdat, region == "south" | region == "midwest")), aes(x = EVTYPE, y = cropcost)) + geom_boxplot() + scale_y_continuous(label = comma, name = "Crop Cost in $") + coord_flip()
+p2 <- ggplot(na.omit(filter(econdat, region == "south" | region == "midwest")), aes(x = EVTYPE, y = propcost)) + geom_boxplot() + scale_y_continuous(label = comma, name = "Property Cost in $") + coord_flip()
+grid.arrange(p1, p2, ncol = 1, main = "South and Midwest")
+
+### west, highest property damages
+filter(na.omit(econdat), region == "west") %.%
+       group_by(EVTYPE) %.%
+       summarise(west.total = sum(propcost)) %.%
+       arrange(desc(west.total)) %.%
+       head(10)
+
+### west, highest crop damages
+filter(na.omit(econdat), region == "west") %.%
+       group_by(EVTYPE) %.%
+       summarise(west.total = sum(cropcost)) %.%
+       arrange(desc(west.total)) %.%
+       head(10)
+
+### northeast, highest property damages
+filter(na.omit(econdat), region == "northeast") %.%
+       group_by(EVTYPE) %.%
+       summarise(northeast.total = sum(propcost)) %.%
+       arrange(desc(northeast.total)) %.%
+       head(10)
+
+### northeast, highest crop damages
+filter(na.omit(econdat), region == "northeast") %.%
+       group_by(EVTYPE) %.%
+       summarise(northeast.total = sum(cropcost)) %.%
+       arrange(desc(northeast.total)) %.%
+       head(10)
+```
+
+In examining the economic damage trends of the south and midwest, we find a similar pattern shown at the aggregate level, with hurricanes creating the largest amount of damage in both crops and property. The west finds most of its economic damage from via tornado (although this seems to be a potential record-keeping error due to its large total), and crop damage from heat related sources. The northeast sees most of its property damage from both heat and tornados, and suffers little in terms of crop losses. This seems reasonable, given that economic activity is lower in this region (although there may be instances of missing data given that an absolute value of 0 is unlikely).
+
+**Conclusions**
+
+The sample employed analyzed events that were highly costly to human life. This method may have limitations, principally illustrated by a potentially disproportionate amount of tornados driving most of the economic and individual-level damage. Additionally, the relationship between loss of life or injury may only be partially related to economic outcomes of storm events.
+```{r}
+with(na.omit(econdat), cor(propcost, FATALITIES))
+with(na.omit(econdat), cor(propcost, INJURIES))
+with(na.omit(econdat), cor(cropcost, FATALITIES))
+with(na.omit(econdat), cor(cropcost, INJURIES))
+``` 
+Secondly, collapsing events categories in the manner the analysis used may be less optimal in finding good descriptive power. Nonetheless, the regional variation seems to generally reliable. Southern and midwestern states have a disproportionate risk for hurricane and tornado events, with markedly high costs in both human life and economic cost.
